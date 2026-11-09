@@ -1,0 +1,69 @@
+[project]
+name = "vgmelo-portal"
+version = "0.1.0"
+description = "Auth, quotas and demo gateway for vgmelo.tech: OAuth + email/TOTP login, per-user quotas and a token budget in front of the live demos."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Victor Gabriel Andrade de Melo", email = "victor.845.melo@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "argon2-cffi>=25.1",
+    "authlib>=1.6",
+    "cryptography>=46",
+    "email-validator>=2.2",
+    "fastapi>=0.120",
+    "httpx2>=2.16.0",
+    "mcp>=2.3",
+    "psycopg[binary]>=3.2",
+    "pydantic-settings>=2.6",
+    "pyotp>=2.9",
+    "segno>=1.6",
+    "sqlalchemy>=2.0.36",
+    "tzdata>=2025.2",
+    "uvicorn[standard]>=0.32",
+]
+
+[project.urls]
+Homepage = "https://github.com/vicgamelo/vgmelo-portal"
+
+[project.scripts]
+vgmelo-portal = "vgmelo_portal.app:main"
+
+[build-system]
+requires = ["uv_build>=0.12.19,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "mypy>=2.4.1",
+    "pip-audit>=2.9",
+    "pytest>=9.2.0",
+    "ruff>=0.17.4",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF", "ASYNC", "S"]
+ignore = ["RUF001", "RUF002", "RUF003", "B008"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106"]
+
+[tool.mypy]
+strict = true
+packages = ["vgmelo_portal"]
+mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = ["authlib.*"]
+ignore_missing_imports = true
