@@ -58,7 +58,7 @@ class Settings(BaseSettings):
 
     # Per user, per day (QUOTA_TZ), per demo.
     quota_tz: str = "America/Sao_Paulo"
-    quota_agents: int = Field(default=5, ge=0)
+    quota_agents: int = Field(default=3, ge=0)
     quota_score: int = Field(default=30, ge=0)
     quota_mcp: int = Field(default=30, ge=0)
     quota_traces: int = Field(default=200, ge=0)
