@@ -264,11 +264,11 @@ class Applicant(BaseModel):
     """Same fields and bounds as mlops-platform's /predict; unknown fields are refused."""
 
     model_config = ConfigDict(extra="forbid")
-    checking_status: Literal["<0", "0<=X<200", ">=200", "no checking"]
+    checking_status: Literal["<0", "0<=X<1940", ">=1940", "no checking"]
     duration: Annotated[int, Field(ge=1, le=120)]
     credit_history: Short
     purpose: Short
-    credit_amount: Annotated[float, Field(gt=0, le=1_000_000)]
+    credit_amount: Annotated[float, Field(gt=0, le=10_000_000)]  # reais
     savings_status: Short
     employment: Short
     installment_commitment: Annotated[int, Field(ge=1, le=4)]
@@ -479,8 +479,6 @@ class AgentBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     field: credit_agent.FieldName
     answer: Annotated[str, Field(min_length=1, max_length=120)]
-    # Reais por DM: só descreve as faixas do credit-g em reais no prompt (o site é a fonte da taxa).
-    brl_per_dm: Annotated[float, Field(gt=0.1, le=100)] = 10.0
 
 
 @router.post("/score/agent")
@@ -501,7 +499,7 @@ async def score_agent(body: AgentBody, current: LoggedIn, ctx: Ctx) -> dict[str,
     await in_db(ctx, admit)
     payload: dict[str, Any] = {
         "model": s.credit_agent_model,
-        "messages": credit_agent.messages(body.field, body.answer, body.brl_per_dm),
+        "messages": credit_agent.messages(body.field, body.answer),
         "temperature": 0,
         "max_tokens": 300,
         "response_format": {"type": "json_object"},
@@ -530,7 +528,7 @@ async def score_agent(body: AgentBody, current: LoggedIn, ctx: Ctx) -> dict[str,
         alert_budget(ctx, db, day)
 
     await in_db(ctx, spend)
-    return {**credit_agent.read(body.field, content, body.brl_per_dm), "model": s.credit_agent_model}
+    return {**credit_agent.read(body.field, content), "model": s.credit_agent_model}
 
 
 # ---------------------------------------------------------------- MCP tools (mcp-server-brasil)

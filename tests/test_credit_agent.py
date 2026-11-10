@@ -98,23 +98,35 @@ def test_ambiguous_answer_asks_back_with_only_the_valid_candidates(client: TestC
         ("age", {"value": 101}, {"status": "unknown"}),
         ("credit_amount", {"value": 90000}, {"status": "ok", "value": 90000}),
         ("credit_amount", {"value": 0}, {"status": "unknown"}),  # mínimo exclusivo
-        ("credit_amount", {"value": 10_000_001}, {"status": "unknown"}),  # 1.000.000 DM × 10
+        ("credit_amount", {"value": 10_000_001}, {"status": "unknown"}),  # teto do scoring, em reais
         ("credit_amount", {"value": "NaN"}, {"status": "unknown"}),
     ],
 )
 def test_only_values_the_scoring_accepts_come_out(field: str, content: Any, expected: dict[str, Any]) -> None:
     raw = content if isinstance(content, str) else json.dumps(content)
-    assert credit_agent.read(field, raw, 10.0) == expected
+    assert credit_agent.read(field, raw) == expected
 
 
-def test_prompt_describes_the_dm_buckets_in_reais() -> None:
-    system = credit_agent.messages("savings_status", "uns 3 mil", 10.0)[0]["content"]
-    assert "- <100: less than R$ 1,000" in system
-    assert "- >=1000: R$ 10,000 or more" in system
-    system = credit_agent.messages("checking_status", "x", 2.5)[0]["content"]
-    assert "from R$ 0 to R$ 500" in system
-    amount = credit_agent.messages("credit_amount", "x", 10.0)[0]["content"]
+def test_prompt_lists_the_brackets_in_reais() -> None:
+    system = credit_agent.messages("savings_status", "uns 3 mil")[0]["content"]
+    assert "- <970: less than R$ 970" in system
+    assert "- >=9700: R$ 9,700 or more" in system
+    assert "from R$ 0 to R$ 1,940" in credit_agent.messages("checking_status", "x")[0]["content"]
+    amount = credit_agent.messages("credit_amount", "x")[0]["content"]
     assert "Brazilian reais" in amount and "from 0 to 10,000,000" in amount
+    assert "DM" not in "".join(m["content"] for f in credit_agent.FIELDS for m in credit_agent.messages(f, "x"))
+
+
+def test_contract_matches_the_scoring_domain() -> None:
+    """Mesmas categorias de mlops-platform/src/mlops_platform/schema.py (faixas de dinheiro em reais)."""
+    assert list(credit_agent.CATS["checking_status"].options) == ["<0", "0<=X<1940", ">=1940", "no checking"]
+    assert list(credit_agent.CATS["savings_status"].options) == [
+        "<970",
+        "970<=X<4850",
+        "4850<=X<9700",
+        ">=9700",
+        "no known savings",
+    ]
 
 
 def test_every_field_of_the_credit_contract_is_covered() -> None:
@@ -127,7 +139,7 @@ def test_unknown_field_and_long_answers_are_refused(client: TestClient, net: Fak
     groq_says(net, {"value": "new car"})
     assert agent(client, field="personal_status").status_code == 422  # protegido, fora do modelo
     assert agent(client, answer="x" * 121).status_code == 422
-    assert agent(client, brl_per_dm=0).status_code == 422
+    assert agent(client, brl_per_dm=10).status_code == 422  # a taxa saiu: tudo já é reais
     assert net.to(*GROQ) == []
 
 

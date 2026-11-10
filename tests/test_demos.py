@@ -17,7 +17,7 @@ from .conftest import TRACE_ID, FakeNet, done_event, email_user, make_client, oa
 
 APPLICANT: dict[str, Any] = {
     "checking_status": "<0", "duration": 48, "credit_history": "existing paid", "purpose": "new car",
-    "credit_amount": 9000, "savings_status": "<100", "employment": "<1", "installment_commitment": 4,
+    "credit_amount": 87300, "savings_status": "<970", "employment": "<1", "installment_commitment": 4,
     "other_parties": "none", "residence_since": 1, "property_magnitude": "no known property", "age": 22,
     "other_payment_plans": "none", "housing": "rent", "existing_credits": 1, "job": "skilled",
     "num_dependents": 1, "own_telephone": "none",
