@@ -53,9 +53,10 @@ def test_picks_one_option_with_a_small_free_model(client: TestClient, net: FakeN
     groq_says(net, {"value": "new car"}, tokens=310)
     r = agent(client, answer="um carro zero")
     assert r.status_code == 200
-    assert r.json() == {"status": "ok", "value": "new car", "model": "llama-3.1-8b-instant"}
+    assert r.json() == {"status": "ok", "value": "new car", "model": "openai/gpt-oss-20b"}
     body = sent(net)
-    assert body["model"] == "llama-3.1-8b-instant" and body["temperature"] == 0 and body["max_tokens"] == 80
+    assert body["model"] == "openai/gpt-oss-20b" and body["temperature"] == 0 and body["max_tokens"] == 300
+    assert body["reasoning_effort"] == "low"
     assert body["response_format"] == {"type": "json_object"}
     assert net.to(*GROQ)[-1].headers["authorization"] == "Bearer gsk-test"
     # A resposta vai como string JSON, separada das instruções.
@@ -77,6 +78,9 @@ def test_ambiguous_answer_asks_back_with_only_the_valid_candidates(client: TestC
     ("field", "content", "expected"),
     [
         ("purpose", {"value": "carro"}, {"status": "unknown"}),  # fora do domínio
+        # O gpt-oss-20b respondeu a descrição em vez do valor para "trabalho lá faz 5 anos".
+        ("employment", {"value": "4 to 7 years"}, {"status": "ok", "value": "4<=X<7"}),
+        ("checking_status", {"value": " Has no checking account"}, {"status": "ok", "value": "no checking"}),
         ("purpose", {"value": None}, {"status": "unknown"}),
         ("purpose", {"candidates": ["used car", "nope"]}, {"status": "ok", "value": "used car"}),
         ("purpose", {"candidates": ["nope"]}, {"status": "unknown"}),

@@ -499,13 +499,15 @@ async def score_agent(body: AgentBody, current: LoggedIn, ctx: Ctx) -> dict[str,
         hit(db, window, user_id)
 
     await in_db(ctx, admit)
-    payload = {
+    payload: dict[str, Any] = {
         "model": s.credit_agent_model,
         "messages": credit_agent.messages(body.field, body.answer, body.brl_per_dm),
         "temperature": 0,
-        "max_tokens": 80,
+        "max_tokens": 300,
         "response_format": {"type": "json_object"},
     }
+    if s.credit_agent_model.startswith("openai/gpt-oss"):
+        payload["reasoning_effort"] = "low"  # o raciocínio conta no max_tokens
     try:
         resp = await ctx.ahttp.post(
             s.groq_url, json=payload, headers={"Authorization": f"Bearer {s.groq_api_key}"}, timeout=10

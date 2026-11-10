@@ -1,10 +1,10 @@
 """Microagente da demo de crédito.
 
-Um modelo pequeno do Groq (plano grátis) lê a resposta livre do visitante para UM campo do credit-g e
-devolve, em JSON, a opção escolhida, as opções entre as quais a resposta fica ambígua, "não sei" ou um
-número. Nada do que o modelo escreve chega à tela: o servidor só aceita valores do domínio do credit-g
-(mesmo contrato de mlops-platform/src/mlops_platform/schema.py) e responde "unknown" para o resto, e aí
-o site usa as regras dele.
+Um modelo pequeno do Groq (plano grátis, openai/gpt-oss-20b) lê a resposta livre do visitante para UM
+campo do credit-g e devolve, em JSON, a opção escolhida, as opções entre as quais a resposta fica
+ambígua, "não sei" ou um número. Nada do que o modelo escreve chega à tela: o servidor só aceita
+valores do domínio do credit-g (mesmo contrato de mlops-platform/src/mlops_platform/schema.py) e
+responde "unknown" para o resto, e aí o site usa as regras dele.
 
 O site pergunta em reais; o modelo de crédito foi treinado em marcos alemães. A taxa vem do site
 (``brl_per_dm``) e só serve para descrever aqui, em reais, as faixas que o credit-g define em DM.
@@ -193,7 +193,8 @@ def messages(field: str, answer: str, rate: float) -> list[dict[str, str]]:
             f"Field: {field} ({cat.about}). Allowed values:\n{opts}",
             'If the answer clearly means one value, reply {"value": "<value>"}.',
             'If it fits two or more values and you cannot tell which, reply {"candidates": ["<value>", ...]}.',
-            'If it fits none, reply {"value": null}. Use the values exactly as written above.',
+            'If it fits none, reply {"value": null}. Use the values exactly as written above, the text '
+            "before the colon.",
         ]
     else:
         num = NUMS[field]
@@ -234,7 +235,12 @@ def read(field: str, content: str, rate: float) -> dict[str, Any]:
         return {"status": "dont_know"}
     value = data.get("value")
     if field in CATS:
-        allowed = list(CATS[field].options(money(rate)))
+        options = CATS[field].options(money(rate))
+        allowed = list(options)
+        # O modelo às vezes devolve a descrição ("4 to 7 years") em vez do valor: mapeia de volta.
+        by_about = {about.casefold(): v for v, about in options.items()}
+        if isinstance(value, str):
+            value = value if value in allowed else by_about.get(value.strip().casefold(), value)
         if isinstance(value, str) and value in allowed:
             return {"status": "ok", "value": value}
         cands = data.get("candidates")
