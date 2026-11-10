@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt, Valid
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from . import credit_agent
 from .context import AppContext, Ctx, LoggedIn
 from .db import DemoRun, affected
 from .limits import TooMany, add_tokens, check_budget, crossed_alerts, hit, refund_quota, take_quota
@@ -310,11 +311,11 @@ class Applicant(BaseModel):
     """Same fields and bounds as mlops-platform's /predict; unknown fields are refused."""
 
     model_config = ConfigDict(extra="forbid")
-    checking_status: Literal["<0", "0<=X<200", ">=200", "no checking"]
+    checking_status: Literal["<0", "0<=X<1940", ">=1940", "no checking"]
     duration: Annotated[int, Field(ge=1, le=120)]
     credit_history: Short
     purpose: Short
-    credit_amount: Annotated[float, Field(gt=0, le=1_000_000)]
+    credit_amount: Annotated[float, Field(gt=0, le=10_000_000)]  # reais
     savings_status: Short
     employment: Short
     installment_commitment: Annotated[int, Field(ge=1, le=4)]
@@ -519,6 +520,62 @@ async def score_batch(
         raise HTTPException(422, {"reason": "no_valid_rows", "report": report})
     logger.warning("scoring batch/score answered %s", resp.status_code)
     raise upstream_error()
+
+
+class AgentBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    field: credit_agent.FieldName
+    answer: Annotated[str, Field(min_length=1, max_length=120)]
+
+
+@router.post("/score/agent")
+async def score_agent(body: AgentBody, current: LoggedIn, ctx: Ctx) -> dict[str, Any]:
+    """Microagente: interpreta a resposta livre de um campo. Não gasta a cota de score; tem limite por
+    hora e usa o teto global de tokens. Qualquer falha aqui faz o site cair nas regras."""
+    s = ctx.settings
+    if not s.groq_api_key:
+        raise HTTPException(503, "agent_off")
+    user_id = current.user.id
+    day, reset = ctx.calendar.today(), ctx.calendar.next_reset()
+    window = ctx.window("score_agent", s.credit_agent_per_hour, 3600)
+
+    def admit(db: Session) -> None:
+        check_budget(db, day, s.global_daily_tokens, reset)
+        hit(db, window, user_id)
+
+    await in_db(ctx, admit)
+    payload: dict[str, Any] = {
+        "model": s.credit_agent_model,
+        "messages": credit_agent.messages(body.field, body.answer),
+        "temperature": 0,
+        "max_tokens": 300,
+        "response_format": {"type": "json_object"},
+    }
+    if s.credit_agent_model.startswith("openai/gpt-oss"):
+        payload["reasoning_effort"] = "low"  # o raciocínio conta no max_tokens
+    try:
+        resp = await ctx.ahttp.post(
+            s.groq_url, json=payload, headers={"Authorization": f"Bearer {s.groq_api_key}"}, timeout=10
+        )
+    except httpx2.HTTPError as exc:
+        logger.warning("groq unreachable: %s", type(exc).__name__)
+        raise upstream_error() from exc
+    if resp.status_code != 200:
+        logger.warning("groq answered %s", resp.status_code)
+        raise upstream_error()
+    try:
+        data = resp.json()
+        content = data["choices"][0]["message"]["content"]
+        tokens = int(data.get("usage", {}).get("total_tokens", 0))
+    except (ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
+        raise upstream_error() from exc
+
+    def spend(db: Session) -> None:
+        add_tokens(db, day, tokens)
+        alert_budget(ctx, db, day)
+
+    await in_db(ctx, spend)
+    return {**credit_agent.read(body.field, content), "model": s.credit_agent_model}
 
 
 # ---------------------------------------------------------------- MCP tools (mcp-server-brasil)

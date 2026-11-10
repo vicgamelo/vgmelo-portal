@@ -78,6 +78,15 @@ class Settings(BaseSettings):
     batch_validate_per_hour: int = Field(default=30, ge=1)  # validating is free, but not unlimited
     question_max_chars: int = Field(default=500, ge=10)
 
+    # Microagente da demo de crédito: modelo pequeno do Groq, só plano grátis. Os tokens entram no mesmo
+    # GLOBAL_DAILY_TOKENS da demo de agentes. Sem chave, o site usa só as regras dele.
+    groq_api_key: str = ""
+    groq_url: str = "https://api.groq.com/openai/v1/chat/completions"
+    # llama-3.1-8b-instant saiu do plano grátis; o gpt-oss-20b é o pequeno que sobrou (30 RPM, 1K RPD por chave,
+    # dividido com a agenda e a demo de agentes).
+    credit_agent_model: str = "openai/gpt-oss-20b"
+    credit_agent_per_hour: int = Field(default=40, ge=1)  # por usuário; um perfil tem 18 perguntas
+
     orchestrator_url: str = "http://agent-orchestrator:8000"
     orchestrator_api_key: str = ""
     orchestrator_agent: str = ""
