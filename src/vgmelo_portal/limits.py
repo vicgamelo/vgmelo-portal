@@ -1,4 +1,4 @@
-"""Rate limits, lockouts, per-user daily quotas and the global token budget.
+"""Rate limits, lockouts, per-user daily quotas and token budgets (global and per user).
 
 Every counter is updated with a single conditional UPDATE (or an INSERT when the row is new), so two
 concurrent requests can't both take the last unit, on SQLite and on Postgres alike.
@@ -17,7 +17,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .db import BudgetAlert, RateCounter, TokenBudget, Usage, affected
+from .db import BudgetAlert, RateCounter, TokenBudget, Usage, UserTokens, affected
 
 DEMOS = ("agents", "score", "mcp", "traces", "studio")
 
@@ -149,20 +149,39 @@ def check_budget(db: Session, day: str, budget: int, reset: datetime) -> None:
         raise TooMany("global_budget", reset)
 
 
-def add_tokens(db: Session, day: str, tokens: int) -> None:
-    if tokens <= 0:
-        return
+def user_tokens_used(db: Session, user_id: str, day: str) -> int:
+    row = db.get(UserTokens, (user_id, day))
+    return row.tokens if row else 0
+
+
+def check_user_tokens(db: Session, user_id: str, day: str, limit: int, reset: datetime) -> None:
+    """A run starts only with balance left; it may end a little over, since tokens are known at the end."""
+    if user_tokens_used(db, user_id, day) >= limit:
+        raise TooMany("user_tokens", reset)
+
+
+def _bump(db: Session, model: type[TokenBudget] | type[UserTokens], keys: dict[str, str], tokens: int) -> None:
     for _ in range(3):
-        res = db.execute(update(TokenBudget).where(TokenBudget.day == day).values(tokens=TokenBudget.tokens + tokens))
+        cond = [getattr(model, k) == v for k, v in keys.items()]
+        res = db.execute(update(model).where(*cond).values(tokens=model.tokens + tokens))
         if affected(res):
             db.commit()
             return
         try:
-            db.add(TokenBudget(day=day, tokens=tokens))
+            db.add(model(**keys, tokens=tokens))
             db.commit()
             return
         except IntegrityError:
             db.rollback()
+
+
+def add_tokens(db: Session, day: str, tokens: int, user_id: str | None = None) -> None:
+    """Charges the global budget and, given ``user_id``, that user's daily tokens."""
+    if tokens <= 0:
+        return
+    _bump(db, TokenBudget, {"day": day}, tokens)
+    if user_id:
+        _bump(db, UserTokens, {"user_id": user_id, "day": day}, tokens)
 
 
 def crossed_alerts(db: Session, day: str, budget: int, percents: list[int]) -> list[tuple[int, int]]:

@@ -138,6 +138,16 @@ class TokenBudget(Base):
     tokens: Mapped[int] = mapped_column(BigInteger, default=0)
 
 
+class UserTokens(Base):
+    """Tokens each user spent on the LLM demos that day (agents, studio, credit micro-agent)."""
+
+    __tablename__ = "user_tokens"
+
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    day: Mapped[str] = mapped_column(String(10), primary_key=True)
+    tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+
+
 class BudgetAlert(Base):
     """One row per (day, threshold) already e-mailed: the primary key makes the alert go out once."""
 

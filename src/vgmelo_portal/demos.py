@@ -1,4 +1,4 @@
-"""Live demos behind login, with per-user daily quotas and a global daily token budget."""
+"""Live demos behind login, with per-user daily quotas and daily token budgets (global and per user)."""
 
 from __future__ import annotations
 
@@ -22,7 +22,16 @@ from sqlalchemy.orm import Session
 from . import credit_agent
 from .context import AppContext, Ctx, LoggedIn
 from .db import DemoRun, affected
-from .limits import TooMany, add_tokens, check_budget, crossed_alerts, hit, refund_quota, take_quota
+from .limits import (
+    TooMany,
+    add_tokens,
+    check_budget,
+    check_user_tokens,
+    crossed_alerts,
+    hit,
+    refund_quota,
+    take_quota,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +51,7 @@ def alert_budget(ctx: AppContext, db: Session, day: str) -> None:
             f"vgmelo.tech: teto de tokens de hoje {what}",
             f"Demos de agentes e estúdio, {day}: {used:,} de {budget:,} tokens ({used * 100 // budget}%).\n"
             "O teto zera à meia-noite (America/Sao_Paulo). Ele fica abaixo do plano grátis do Groq/OpenRouter;\n"
-            "se os avisos virarem rotina, baixe GLOBAL_DAILY_TOKENS, QUOTA_AGENTS ou QUOTA_STUDIO no .env da VPS.\n\n"
+            "se os avisos virarem rotina, baixe GLOBAL_DAILY_TOKENS, USER_DAILY_TOKENS ou as cotas no .env da VPS.\n\n"
             f"Execuções e consumo por dia: {s.site_url}/admin\n",
         )
 
@@ -141,7 +150,12 @@ async def relay_run(
             ctx.active_runs.discard(user_id)
 
     try:
-        await in_db(ctx, lambda db: check_budget(db, day, s.global_daily_tokens, reset))
+
+        def admit(db: Session) -> None:
+            check_budget(db, day, s.global_daily_tokens, reset)
+            check_user_tokens(db, user_id, day, s.user_daily_tokens, reset)
+
+        await in_db(ctx, admit)
         await reserve(ctx, user_id, demo)
     except BaseException:
         release()
@@ -194,7 +208,7 @@ async def relay_run(
                 )
             )
             db.commit()
-            add_tokens(db, day, tokens)
+            add_tokens(db, day, tokens, user_id)
             alert_budget(ctx, db, day)
 
         return run
@@ -295,7 +309,7 @@ async def get_trace(trace_id: TraceId, current: LoggedIn, ctx: Ctx) -> list[dict
             )
             db.commit()
             if affected(res):
-                add_tokens(db, run.day, extra)
+                add_tokens(db, run.day, extra, run.user_id)
                 alert_budget(ctx, db, run.day)
 
         await in_db(ctx, reconcile)
@@ -541,6 +555,7 @@ async def score_agent(body: AgentBody, current: LoggedIn, ctx: Ctx) -> dict[str,
 
     def admit(db: Session) -> None:
         check_budget(db, day, s.global_daily_tokens, reset)
+        check_user_tokens(db, user_id, day, s.user_daily_tokens, reset)
         hit(db, window, user_id)
 
     await in_db(ctx, admit)
@@ -571,7 +586,7 @@ async def score_agent(body: AgentBody, current: LoggedIn, ctx: Ctx) -> dict[str,
         raise upstream_error() from exc
 
     def spend(db: Session) -> None:
-        add_tokens(db, day, tokens)
+        add_tokens(db, day, tokens, user_id)
         alert_budget(ctx, db, day)
 
     await in_db(ctx, spend)

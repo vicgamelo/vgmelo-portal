@@ -62,11 +62,13 @@ class Settings(BaseSettings):
     quota_score: int = Field(default=30, ge=0)
     quota_mcp: int = Field(default=30, ge=0)
     quota_traces: int = Field(default=200, ge=0)
-    quota_studio: int = Field(default=5, ge=0)  # runs of agents written in the studio
+    quota_studio: int = Field(default=10, ge=0)  # runs of agents written in the studio
     studio_max_versions: int = Field(default=100, ge=1)  # saved versions per user, all agents together
     studio_saves_per_hour: int = Field(default=60, ge=1)
     # Sum of input+output tokens across every agents run, per day. 0 disables the demo.
     global_daily_tokens: int = Field(default=300_000, ge=0)
+    # Same sum, per user per day: agents, studio and the credit micro-agent share it. 0 disables them.
+    user_daily_tokens: int = Field(default=50_000, ge=0)
     max_concurrent_runs: int = Field(default=2, ge=1)
     # E-mail to the owner when the day's tokens cross these percentages of the budget (empty disables).
     alert_to: str = ""  # defaults to contact_to

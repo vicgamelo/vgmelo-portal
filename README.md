@@ -13,7 +13,7 @@ All responses are JSON unless noted. Every non-GET request must carry `Origin: h
 
 | Method | Path | Body | Notes |
 | --- | --- | --- | --- |
-| GET | `/api/me` | | `{user: {id, name, email, provider, mfa} \| null, pending: "totp_setup" \| null, providers: {google, github, email}, quotas: {agents, score, mcp, traces: {limit, used, remaining}}, resets_at, budget_exhausted}` |
+| GET | `/api/me` | | `{user: {id, name, email, provider, mfa} \| null, pending: "totp_setup" \| null, providers: {google, github, email}, quotas: {agents, score, mcp, traces, studio: {limit, used, remaining}}, tokens: {limit, used, remaining}, resets_at, budget_exhausted}` |
 | GET | `/api/auth/{google\|github}/start?next=/path` | | 302 to the provider. `next` must be a relative path, anything else becomes `/`. |
 | GET | `/api/auth/{google\|github}/callback` | | 302 to `SITE_URL + next`; on failure adds `?auth_error=oauth`. |
 | POST | `/api/auth/email/register` | `{email, password}` | Always `202 {"status":"verification_sent"}`. Password 10-128 chars. |
@@ -44,8 +44,10 @@ Demos need a full session (`401 {"detail":"login_required"}`). Limits answer `42
 `{"reason": ..., "retry_at": ISO-8601}` and `Retry-After`:
 
 - `daily_quota`: this user's quota for that demo is used up until midnight in `QUOTA_TZ`.
-- `global_budget`: the agents demo and the credit micro-agent spent `GLOBAL_DAILY_TOKENS` today, for everyone. The owner gets an
+- `global_budget`: the agents demo, the studio and the credit micro-agent spent `GLOBAL_DAILY_TOKENS` today, for everyone. The owner gets an
   e-mail at 80% and 100% of it (`ALERT_BUDGET_PERCENTS`, once per day each).
+- `user_tokens`: this user spent `USER_DAILY_TOKENS` today across agents, studio and the credit micro-agent. A run
+  starts only with balance left, so the last one of the day may end a little over.
 - `busy`: an agents run of yours is still going, or `MAX_CONCURRENT_RUNS` are in flight.
 - `rate_limited` / `locked`: too many requests or failed logins from this IP / for this account.
 

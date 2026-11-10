@@ -207,7 +207,7 @@ def test_run_relays_the_stream_and_spends_the_studio_quota(
     assert json.loads(sent.content) == {"input": "Qual a Selic?", "agent": AGENT}
 
     quotas = client.get("/api/me").json()["quotas"]
-    assert quotas["studio"] == {"limit": 5, "used": 1, "remaining": 4}
+    assert quotas["studio"] == {"limit": 10, "used": 1, "remaining": 9}
     assert quotas["agents"]["used"] == 0  # separate from the team demo
     with app.state.ctx.sessions() as db:
         assert db.get(DemoRun, "run_1") is not None
@@ -218,12 +218,12 @@ def test_run_relays_the_stream_and_spends_the_studio_quota(
 
 def test_studio_quota_per_day(client: TestClient, studio_net: FakeNet) -> None:
     oauth_login(client)
-    for i in range(5):
+    for i in range(10):
         studio_net.orchestrator_body = done_event(run_id=f"run_{i}", trace_id=None)
         assert run(client).status_code == 200
     r = run(client)
     assert r.status_code == 429 and r.json()["reason"] == "daily_quota"
-    assert len(studio_net.to("agent-orchestrator", "/v1/studio/runs/stream")) == 5
+    assert len(studio_net.to("agent-orchestrator", "/v1/studio/runs/stream")) == 10
 
 
 def test_agent_the_orchestrator_refuses(client: TestClient, studio_net: FakeNet) -> None:

@@ -20,7 +20,7 @@ from .contact import router as contact_router
 from .context import DB, AppContext, Ctx, MaybeCurrent
 from .db import make_engine, make_sessionmaker
 from .demos import router as demo_router
-from .limits import DEMOS, Calendar, TooMany, tokens_used, used_today
+from .limits import DEMOS, Calendar, TooMany, tokens_used, used_today, user_tokens_used
 from .mailer import Mailer
 from .security import Keyring
 from .studio import router as studio_router
@@ -140,6 +140,7 @@ def create_app(settings: Settings | None = None, transport: Any = None) -> FastA
         user, pending = describe(current)
         day = ctx.calendar.today()
         used = used_today(db, current.user.id, day) if user and current else {}
+        spent = user_tokens_used(db, current.user.id, day) if user and current else 0
         quotas = {}
         for demo in DEMOS:
             limit = cfg.quota_for(demo)
@@ -151,6 +152,11 @@ def create_app(settings: Settings | None = None, transport: Any = None) -> FastA
             "quotas": quotas,
             "resets_at": ctx.calendar.next_reset().isoformat(timespec="seconds"),
             "budget_exhausted": tokens_used(db, day) >= cfg.global_daily_tokens,
+            "tokens": {
+                "limit": cfg.user_daily_tokens,
+                "used": spent,
+                "remaining": max(0, cfg.user_daily_tokens - spent),
+            },
         }
 
     app.include_router(auth_router)
