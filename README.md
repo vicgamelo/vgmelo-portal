@@ -22,7 +22,8 @@ All responses are JSON unless noted. Every non-GET request must carry `Origin: h
 | POST | `/api/auth/totp/confirm` | `{code}` | `{"status":"ok", "recovery_codes": [10 codes, shown once]}`, full session. |
 | POST | `/api/auth/email/login` | `{email, password, totp \| recovery_code}` | `{"status":"ok"}`, or `{"status":"totp_setup_required"}` if setup was never finished. Any wrong factor: `401 {"detail":"invalid_credentials"}`. |
 | POST | `/api/auth/logout` | | 204, session deleted server side. |
-| POST | `/api/demo/agents/stream` | `{question}` | `text/event-stream` relayed from the orchestrator; the last event is `done` with `run_id`, `trace_id`, tokens. |
+| POST | `/api/demo/agents/stream` | `{question, servers?}` | `text/event-stream` relayed from the orchestrator; the last event is `done` with `run_id`, `trace_id`, tokens. `servers` picks the MCP servers on for the run (`brasil`, `noticias`, `normas`, `agenda`); omitted means all. |
+| GET | `/api/demo/agents/servers` | | Which MCP servers are up and which agents each one feeds (for the demo's switches). |
 | GET | `/api/demo/traces/{trace_id}` | | genai-lens spans; 404 unless the trace came from this user's run (also 404 while the lens hasn't received it yet). |
 | POST | `/api/demo/score` | one applicant (see `mlops-platform/examples/applicants.json`) | `{model_version, prediction: {default_probability, decision}}` |
 | POST | `/api/demo/score/pipeline` | `{applicant: {18 fields: text, number or null}, lang: pt\|en}` | `text/event-stream` from the scoring service: `stage` events (`raw`, `transform`, `normalize`, `fit`, `model`, `explain`), then `result` and `done`. An unusable profile is `422 {"detail":{"reason":"invalid_applicant","problems":[{column, code, message, value, severity}]}}`, refunded. |

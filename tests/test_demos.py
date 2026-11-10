@@ -75,23 +75,65 @@ def test_agents_stream_relays_and_records_the_run(client: TestClient, net: FakeN
         run = db.get(DemoRun, "run_1")
         assert run is not None and run.trace_id == TRACE_ID and run.tokens == 120
         assert db.scalar(select(TokenBudget.tokens)) == 120
-    assert client.get("/api/me").json()["quotas"]["agents"] == {"limit": 5, "used": 1, "remaining": 4}
+    assert client.get("/api/me").json()["quotas"]["agents"] == {"limit": 3, "used": 1, "remaining": 2}
+
+
+def test_agents_stream_passes_the_chosen_mcp_servers(client: TestClient, net: FakeNet) -> None:
+    oauth_login(client)
+    body = {"question": "Notícias da Selic?", "servers": ["noticias", "brasil", "noticias"]}
+    assert client.post("/api/demo/agents/stream", json=body).status_code == 200
+    sent = json.loads(net.to("agent-orchestrator", "/v1/runs/stream")[0].content)
+    assert sent == {"input": "Notícias da Selic?", "servers": ["brasil", "noticias"]}
+    net.orchestrator_body = done_event(run_id="run_2", trace_id=None)
+    assert client.post("/api/demo/agents/stream", json={"question": "oi", "servers": []}).status_code == 200
+    assert json.loads(net.to("agent-orchestrator", "/v1/runs/stream")[1].content)["servers"] == []
+
+
+@pytest.mark.parametrize("servers", [["internet"], ["http://evil.example/mcp"], ["brasil"] * 5, "brasil", [1]])
+def test_agents_stream_rejects_unknown_servers(client: TestClient, net: FakeNet, servers: Any) -> None:
+    oauth_login(client)
+    r = client.post("/api/demo/agents/stream", json={"question": "oi", "servers": servers})
+    assert r.status_code == 422
+    assert not net.to("agent-orchestrator")  # nada chega ao orquestrador nem gasta cota
+    assert client.get("/api/me").json()["quotas"]["agents"]["used"] == 0
+
+
+def test_agents_servers_listing(client: TestClient, net: FakeNet) -> None:
+    assert client.get("/api/demo/agents/servers").status_code == 401
+    oauth_login(client)
+    net.routes[("agent-orchestrator", "/v1/servers")] = lambda req: httpx2.Response(
+        200,
+        json=[
+            {"name": "brasil", "up": True, "tools": ["consultar_cep"], "agents": ["economist"]},
+            {"name": "normas", "up": False, "tools": [], "agents": []},
+            {"name": "segredo", "up": True, "tools": ["x"], "agents": ["y"]},
+        ],
+    )
+    r = client.get("/api/demo/agents/servers")
+    assert r.status_code == 200
+    assert r.json() == [
+        {"name": "brasil", "up": True, "agents": ["economist"]},
+        {"name": "normas", "up": False, "agents": []},
+    ]
+    assert net.to("agent-orchestrator", "/v1/servers")[0].headers["x-api-key"] == "internal-orch-key"
+    net.routes[("agent-orchestrator", "/v1/servers")] = lambda req: httpx2.Response(500, json={})
+    assert client.get("/api/demo/agents/servers").status_code == 502
 
 
 def test_agents_quota_per_day(client: TestClient, net: FakeNet) -> None:
     oauth_login(client)
-    for i in range(5):
+    for i in range(3):  # 3 por dia; depois disso a demo oferece consultoria
         net.orchestrator_body = done_event(run_id=f"run_{i}", trace_id=None)
         assert ask(client).status_code == 200
     r = ask(client)
     assert r.status_code == 429
     assert r.json() == {"reason": "daily_quota", "retry_at": midnight_sp()}
-    assert len(net.to("agent-orchestrator")) == 5
+    assert len(net.to("agent-orchestrator")) == 3
 
 
 def test_quota_is_per_user(client: TestClient, net: FakeNet, app: FastAPI) -> None:
     oauth_login(client)
-    for i in range(5):
+    for i in range(3):
         net.orchestrator_body = done_event(run_id=f"run_{i}", trace_id=None)
         ask(client)
     assert ask(client).status_code == 429

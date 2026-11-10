@@ -7,7 +7,7 @@ import json
 import logging
 from collections.abc import AsyncIterator, Callable
 from datetime import UTC, date, datetime, timedelta
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, get_args
 
 import httpx2
 from fastapi import APIRouter, HTTPException, Path, Query, Request
@@ -73,9 +73,15 @@ def upstream_error() -> HTTPException:
 # ---------------------------------------------------------------- agents (SSE)
 
 
+# MCP servers the visitor can turn on and off in the agents demo (the orchestrator's names).
+MCPServerName = Literal["brasil", "noticias", "normas", "agenda"]
+
+
 class Question(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     question: str = Field(min_length=1)
+    # Omitted: every server. Repeated names are harmless; the orchestrator takes the set.
+    servers: list[MCPServerName] | None = Field(default=None, max_length=4)
 
 
 def _frame(event: str | None, data: list[str]) -> str:
@@ -128,6 +134,8 @@ async def agents_stream(body: Question, current: LoggedIn, ctx: Ctx) -> Streamin
         raise
 
     payload: dict[str, Any] = {"input": body.question}
+    if body.servers is not None:
+        payload["servers"] = sorted(set(body.servers))
     if s.orchestrator_agent:
         payload["agent"] = s.orchestrator_agent
     request = ctx.ahttp.build_request(
@@ -206,6 +214,26 @@ async def agents_stream(body: Question, current: LoggedIn, ctx: Ctx) -> Streamin
             yield item
 
     return StreamingResponse(relay(), media_type="text/event-stream", headers=SSE_HEADERS)
+
+
+@router.get("/agents/servers")
+async def agents_servers(current: LoggedIn, ctx: Ctx) -> list[dict[str, Any]]:
+    """Which MCP servers are up and which agents each one feeds, for the demo's on/off switches."""
+    s = ctx.settings
+    try:
+        resp = await ctx.ahttp.get(
+            f"{s.orchestrator_url}/v1/servers", headers={"X-API-Key": s.orchestrator_api_key}, timeout=10
+        )
+    except httpx2.HTTPError as exc:
+        raise upstream_error() from exc
+    if resp.status_code != 200:
+        raise upstream_error()
+    allowed = set(get_args(MCPServerName))
+    return [
+        {"name": x["name"], "up": bool(x.get("up")), "agents": list(x.get("agents") or [])}
+        for x in resp.json()
+        if isinstance(x, dict) and x.get("name") in allowed
+    ]
 
 
 # ---------------------------------------------------------------- traces (genai-lens)

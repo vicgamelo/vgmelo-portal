@@ -37,7 +37,7 @@ def test_google_login_uses_state_and_pkce(client: TestClient, net: FakeNet) -> N
     me = client.get("/api/me").json()
     assert me["user"]["provider"] == "google" and me["user"]["email"] == "ana@gmail.com"
     assert me["user"]["name"] == "Ana" and me["user"]["mfa"] is False
-    assert me["quotas"]["agents"] == {"limit": 5, "used": 0, "remaining": 5}
+    assert me["quotas"]["agents"] == {"limit": 3, "used": 0, "remaining": 3}
 
 
 def test_github_login_takes_primary_verified_email(client: TestClient, net: FakeNet) -> None:
