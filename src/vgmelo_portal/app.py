@@ -23,6 +23,7 @@ from .demos import router as demo_router
 from .limits import DEMOS, Calendar, TooMany, tokens_used, used_today
 from .mailer import Mailer
 from .security import Keyring
+from .studio import router as studio_router
 
 logger = logging.getLogger("vgmelo_portal")
 
@@ -154,6 +155,7 @@ def create_app(settings: Settings | None = None, transport: Any = None) -> FastA
 
     app.include_router(auth_router)
     app.include_router(demo_router)
+    app.include_router(studio_router)
     app.include_router(contact_router)
     app.include_router(admin_router)
     app.add_middleware(Guard, settings=cfg)

@@ -159,6 +159,22 @@ class DemoRun(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
+class StudioVersion(Base):
+    """An agent saved in the studio. Versions are never edited: saving again makes the next number."""
+
+    __tablename__ = "studio_versions"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(60))
+    version: Mapped[int] = mapped_column(Integer)
+    note: Mapped[str | None] = mapped_column(String(200))
+    spec: Mapped[str] = mapped_column(Text)  # JSON: instructions, model, tools, temperature, max_steps
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+    __table_args__ = (UniqueConstraint("user_id", "name", "version", name="uq_studio_user_name_version"),)
+
+
 class ContactMessage(Base):
     __tablename__ = "contact_messages"
 

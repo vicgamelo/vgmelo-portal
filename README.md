@@ -24,6 +24,11 @@ All responses are JSON unless noted. Every non-GET request must carry `Origin: h
 | POST | `/api/auth/logout` | | 204, session deleted server side. |
 | POST | `/api/demo/agents/stream` | `{question, servers?}` | `text/event-stream` relayed from the orchestrator; the last event is `done` with `run_id`, `trace_id`, tokens. `servers` picks the MCP servers on for the run (`brasil`, `noticias`, `normas`, `agenda`); omitted means all. |
 | GET | `/api/demo/agents/servers` | | Which MCP servers are up and which agents each one feeds (for the demo's switches). |
+| GET | `/api/studio/catalog` | | Agent studio: models, tools, starting templates and limits (from the orchestrator). |
+| GET | `/api/studio/versions` | | The visitor's saved agents, newest version first. Private to each user. |
+| POST | `/api/studio/versions` | `{name, note?, agent}` | Saves the next version of `name`. `agent` is `{instructions, model, tools, temperature, max_steps}`. Free, capped by `STUDIO_MAX_VERSIONS`. |
+| DELETE | `/api/studio/versions/{id}` | | Deletes one of your versions (404 for anyone else's). |
+| POST | `/api/studio/run/stream` | `{question, agent}` | Runs the agent as written, same SSE as the agents demo. Spends the `studio` quota; `422 {reason: invalid_agent, message}` when the orchestrator refuses the model or a tool. |
 | GET | `/api/demo/traces/{trace_id}` | | genai-lens spans; 404 unless the trace came from this user's run (also 404 while the lens hasn't received it yet). |
 | POST | `/api/demo/score` | one applicant (see `mlops-platform/examples/applicants.json`) | `{model_version, prediction: {default_probability, decision}}` |
 | POST | `/api/demo/score/pipeline` | `{applicant: {18 fields: text, number or null}, lang: pt\|en}` | `text/event-stream` from the scoring service: `stage` events (`raw`, `transform`, `normalize`, `fit`, `model`, `explain`), then `result` and `done`. An unusable profile is `422 {"detail":{"reason":"invalid_applicant","problems":[{column, code, message, value, severity}]}}`, refunded. |

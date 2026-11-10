@@ -35,13 +35,13 @@ def alert_budget(ctx: AppContext, db: Session, day: str) -> None:
     s = ctx.settings
     budget = s.global_daily_tokens
     for pct, used in crossed_alerts(db, day, budget, s.budget_alert_percents):
-        what = "acabou: a demo de agentes para até a meia-noite" if pct >= 100 else f"chegou a {pct}%"
+        what = "acabou: a demo de agentes e o estúdio param até a meia-noite" if pct >= 100 else f"chegou a {pct}%"
         ctx.mailer.send(
             s.alert_to or s.contact_to,
             f"vgmelo.tech: teto de tokens de hoje {what}",
-            f"Demo de agentes, {day}: {used:,} de {budget:,} tokens ({used * 100 // budget}%).\n"
+            f"Demos de agentes e estúdio, {day}: {used:,} de {budget:,} tokens ({used * 100 // budget}%).\n"
             "O teto zera à meia-noite (America/Sao_Paulo). Ele fica abaixo do plano grátis do Groq/OpenRouter;\n"
-            "se os avisos virarem rotina, baixe GLOBAL_DAILY_TOKENS ou QUOTA_AGENTS no .env da VPS.\n\n"
+            "se os avisos virarem rotina, baixe GLOBAL_DAILY_TOKENS, QUOTA_AGENTS ou QUOTA_STUDIO no .env da VPS.\n\n"
             f"Execuções e consumo por dia: {s.site_url}/admin\n",
         )
 
@@ -108,10 +108,24 @@ async def _sse(lines: AsyncIterator[str]) -> AsyncIterator[tuple[str | None, lis
 
 @router.post("/agents/stream")
 async def agents_stream(body: Question, current: LoggedIn, ctx: Ctx) -> StreamingResponse:
-    s = ctx.settings
-    if len(body.question) > s.question_max_chars:
+    if len(body.question) > ctx.settings.question_max_chars:
         raise HTTPException(422, "question_too_long")
-    user_id = current.user.id
+    payload: dict[str, Any] = {"input": body.question}
+    if body.servers is not None:
+        payload["servers"] = sorted(set(body.servers))
+    if ctx.settings.orchestrator_agent:
+        payload["agent"] = ctx.settings.orchestrator_agent
+    return await relay_run(ctx, current.user.id, "agents", "/v1/runs/stream", payload)
+
+
+async def relay_run(
+    ctx: AppContext, user_id: str, demo: str, path: str, payload: dict[str, Any], *, invalid: str | None = None
+) -> StreamingResponse:
+    """Runs on the orchestrator and relays its SSE, charging ``demo``'s quota and the token budget.
+
+    ``invalid``: the reason to answer 422 with when the orchestrator refuses the payload (422); without
+    it, a refusal is an upstream error like any other."""
+    s = ctx.settings
     day, reset = ctx.calendar.today(), ctx.calendar.next_reset()
     # Check-and-add with no await in between: one event loop, so this is atomic.
     if user_id in ctx.active_runs or len(ctx.active_runs) >= s.max_concurrent_runs:
@@ -127,19 +141,14 @@ async def agents_stream(body: Question, current: LoggedIn, ctx: Ctx) -> Streamin
 
     try:
         await in_db(ctx, lambda db: check_budget(db, day, s.global_daily_tokens, reset))
-        await reserve(ctx, user_id, "agents")
+        await reserve(ctx, user_id, demo)
     except BaseException:
         release()
         raise
 
-    payload: dict[str, Any] = {"input": body.question}
-    if body.servers is not None:
-        payload["servers"] = sorted(set(body.servers))
-    if s.orchestrator_agent:
-        payload["agent"] = s.orchestrator_agent
     request = ctx.ahttp.build_request(
         "POST",
-        f"{s.orchestrator_url}/v1/runs/stream",
+        f"{s.orchestrator_url}{path}",
         json=payload,
         headers={"X-API-Key": s.orchestrator_api_key, "Accept": "text/event-stream"},
         timeout=httpx2.Timeout(10, read=s.orchestrator_timeout_s),
@@ -148,14 +157,24 @@ async def agents_stream(body: Question, current: LoggedIn, ctx: Ctx) -> Streamin
         upstream = await ctx.ahttp.send(request, stream=True)
     except httpx2.HTTPError as exc:
         logger.warning("orchestrator unreachable: %s", type(exc).__name__)
-        await refund(ctx, user_id, day, "agents")
+        await refund(ctx, user_id, day, demo)
         release()
         raise upstream_error() from exc
     if upstream.status_code != 200:
         logger.warning("orchestrator answered %s", upstream.status_code)
+        detail = ""
+        if upstream.status_code == 422 and invalid:
+            try:
+                await upstream.aread()
+                found = upstream.json().get("detail")
+                detail = found if isinstance(found, str) else ""
+            except (httpx2.HTTPError, ValueError, AttributeError):
+                pass
         await upstream.aclose()
-        await refund(ctx, user_id, day, "agents")
+        await refund(ctx, user_id, day, demo)
         release()
+        if upstream.status_code == 422 and invalid:
+            raise HTTPException(422, {"reason": invalid, "message": detail[:300]})
         raise upstream_error()
 
     queue: asyncio.Queue[str | None] = asyncio.Queue()
@@ -202,7 +221,7 @@ async def agents_stream(body: Question, current: LoggedIn, ctx: Ctx) -> Streamin
             release()
             await queue.put(None)
             if not recorded:
-                logger.warning("agents run ended without a done event user=%s", user_id)
+                logger.warning("%s run ended without a done event user=%s", demo, user_id)
 
     task = asyncio.create_task(pump())
     ctx.background.add(task)
