@@ -10,18 +10,18 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Annotated, Any, Literal
 
 import httpx2
-from fastapi import APIRouter, HTTPException, Path
+from fastapi import APIRouter, HTTPException, Path, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from mcp.client import Client
 from mcp.client.streamable_http import streamable_http_client
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt, ValidationError
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from .context import AppContext, Ctx, LoggedIn
 from .db import DemoRun, affected
-from .limits import TooMany, add_tokens, check_budget, crossed_alerts, refund_quota, take_quota
+from .limits import TooMany, add_tokens, check_budget, crossed_alerts, hit, refund_quota, take_quota
 
 logger = logging.getLogger(__name__)
 
@@ -291,6 +291,9 @@ async def score(applicant: Applicant, current: LoggedIn, ctx: Ctx) -> dict[str, 
         resp = await ctx.ahttp.post(
             f"{ctx.settings.scoring_url}/predict", json={"applicants": [applicant.model_dump()]}, timeout=15
         )
+        if resp.status_code == 422:  # e.g. a category outside credit-g: the visitor's input, not an outage
+            await refund(ctx, user_id, day, "score")
+            raise HTTPException(422, "invalid_applicant")
         resp.raise_for_status()
         data = resp.json()
         return {"model_version": data["model_version"], "prediction": data["predictions"][0]}
@@ -298,6 +301,177 @@ async def score(applicant: Applicant, current: LoggedIn, ctx: Ctx) -> dict[str, 
         logger.warning("scoring failed: %s", type(exc).__name__)
         await refund(ctx, user_id, day, "score")
         raise upstream_error() from exc
+
+
+# Live pipeline: values stay loose (text, number or null = "não sei") because showing the casts and the
+# imputation is the point of the demo. The scoring service validates the domain and answers 422 before
+# streaming; the quota is refunded then.
+Loose = StrictInt | StrictFloat | Annotated[str, Field(max_length=64)] | None
+Lang = Literal["pt", "en"]
+
+
+class Draft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    checking_status: Loose
+    duration: Loose
+    credit_history: Loose
+    purpose: Loose
+    credit_amount: Loose
+    savings_status: Loose
+    employment: Loose
+    installment_commitment: Loose
+    other_parties: Loose
+    residence_since: Loose
+    property_magnitude: Loose
+    age: Loose
+    other_payment_plans: Loose
+    housing: Loose
+    existing_credits: Loose
+    job: Loose
+    num_dependents: Loose
+    own_telephone: Loose
+
+
+class PipelineBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    applicant: Draft
+    lang: Lang = "pt"
+
+
+def _problems(resp: httpx2.Response) -> list[dict[str, Any]]:
+    """Field problems from the scoring service's 422, reduced to known keys."""
+    try:
+        detail = resp.json().get("detail", {})
+        problems = detail.get("problems", []) if isinstance(detail, dict) else []
+    except (ValueError, AttributeError):
+        return []
+    keys = ("column", "code", "message", "value", "severity")
+    return [{k: p.get(k) for k in keys} for p in problems[:40] if isinstance(p, dict)]
+
+
+@router.post("/score/pipeline")
+async def score_pipeline(body: PipelineBody, current: LoggedIn, ctx: Ctx) -> StreamingResponse:
+    """One use of the score quota: streams every step of the champion's prediction (SSE)."""
+    user_id = current.user.id
+    day = await reserve(ctx, user_id, "score")
+    request = ctx.ahttp.build_request(
+        "POST",
+        f"{ctx.settings.scoring_url}/pipeline",
+        params={"lang": body.lang},
+        json={"applicant": body.applicant.model_dump()},
+        headers={"Accept": "text/event-stream"},
+        timeout=httpx2.Timeout(10, read=30),
+    )
+    try:
+        upstream = await ctx.ahttp.send(request, stream=True)
+    except httpx2.HTTPError as exc:
+        logger.warning("scoring unreachable: %s", type(exc).__name__)
+        await refund(ctx, user_id, day, "score")
+        raise upstream_error() from exc
+    if upstream.status_code != 200:
+        await upstream.aread()
+        await upstream.aclose()
+        await refund(ctx, user_id, day, "score")
+        if upstream.status_code == 422:
+            raise HTTPException(422, {"reason": "invalid_applicant", "problems": _problems(upstream)})
+        if upstream.status_code == 429:
+            raise TooMany("busy", datetime.now(UTC) + timedelta(seconds=5))
+        logger.warning("scoring pipeline answered %s", upstream.status_code)
+        raise upstream_error()
+
+    async def relay() -> AsyncIterator[str]:
+        # Re-framed with \n line endings (the site's reader splits on blank lines), comments dropped.
+        try:
+            async for event, data in _sse(upstream.aiter_lines()):
+                if event != ":":
+                    yield _frame(event, data)
+        except httpx2.HTTPError as exc:
+            logger.warning("scoring stream broke: %s", type(exc).__name__)
+            yield _frame("error", [json.dumps({"message": "upstream_unavailable"})])
+        finally:
+            await upstream.aclose()
+
+    return StreamingResponse(relay(), media_type="text/event-stream", headers=SSE_HEADERS)
+
+
+CSV_TYPES = frozenset({"text/csv", "text/plain"})
+
+
+async def _csv_body(request: Request) -> bytes:
+    """The file goes as the raw body (text/csv): no multipart parser, no JSON escaping inflating it.
+    The Guard already capped its size at BATCH_MAX_BYTES."""
+    ctype = request.headers.get("content-type", "").split(";")[0].strip().lower()
+    if ctype not in CSV_TYPES:
+        raise HTTPException(415, "csv_expected")
+    body = await request.body()
+    if not body.strip():
+        raise HTTPException(422, "empty_file")
+    return body
+
+
+async def _to_scoring(ctx: AppContext, path: str, body: bytes, lang: Lang) -> httpx2.Response:
+    return await ctx.ahttp.post(
+        f"{ctx.settings.scoring_url}{path}",
+        params={"lang": lang},
+        content=body,
+        headers={"content-type": "text/csv"},
+        timeout=httpx2.Timeout(10, read=30),
+    )
+
+
+@router.post("/score/batch/validate")
+async def score_batch_validate(
+    request: Request, current: LoggedIn, ctx: Ctx, lang: Annotated[Lang, Query()] = "pt"
+) -> dict[str, Any]:
+    """Checks the file (what is wrong, by line and column). Free, but rate limited per user."""
+    body = await _csv_body(request)
+    user_id = current.user.id
+    window = ctx.window("score_validate", ctx.settings.batch_validate_per_hour, 3600)
+    await in_db(ctx, lambda db: hit(db, window, user_id))
+    try:
+        resp = await _to_scoring(ctx, "/batch/validate", body, lang)
+    except httpx2.HTTPError as exc:
+        raise upstream_error() from exc
+    if resp.status_code == 413:
+        raise HTTPException(413, "body_too_large")
+    if resp.status_code != 200:
+        logger.warning("scoring batch/validate answered %s", resp.status_code)
+        raise upstream_error()
+    report: dict[str, Any] = resp.json()
+    return report
+
+
+@router.post("/score/batch")
+async def score_batch(
+    request: Request, current: LoggedIn, ctx: Ctx, lang: Annotated[Lang, Query()] = "pt"
+) -> dict[str, Any]:
+    """Scores the valid rows of the file. The whole file is one use of the score quota, refunded when
+    nothing in it could be scored."""
+    body = await _csv_body(request)
+    user_id = current.user.id
+    day = await reserve(ctx, user_id, "score")
+    try:
+        resp = await _to_scoring(ctx, "/batch/score", body, lang)
+    except httpx2.HTTPError as exc:
+        await refund(ctx, user_id, day, "score")
+        raise upstream_error() from exc
+    if resp.status_code == 200:
+        try:
+            result: dict[str, Any] = resp.json()
+            return result
+        except ValueError:
+            pass
+    await refund(ctx, user_id, day, "score")
+    if resp.status_code == 413:
+        raise HTTPException(413, "body_too_large")
+    if resp.status_code == 422:
+        try:
+            report = resp.json()["detail"]["report"]
+        except (ValueError, KeyError, TypeError):
+            report = None
+        raise HTTPException(422, {"reason": "no_valid_rows", "report": report})
+    logger.warning("scoring batch/score answered %s", resp.status_code)
+    raise upstream_error()
 
 
 # ---------------------------------------------------------------- MCP tools (mcp-server-brasil)

@@ -27,6 +27,8 @@ from .security import Keyring
 logger = logging.getLogger("vgmelo_portal")
 
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+# Routes that take a file instead of a small JSON body (their own, larger, cap).
+UPLOAD_PATHS = frozenset({"/api/demo/score/batch", "/api/demo/score/batch/validate"})
 
 
 class Guard:
@@ -67,7 +69,7 @@ class Guard:
                 await reply(403, "bad_origin")
                 return
             declared = headers.get("content-length")
-            limit = self.settings.max_body_bytes
+            limit = self.settings.batch_max_bytes if path in UPLOAD_PATHS else self.settings.max_body_bytes
             if declared is not None and (not declared.isdigit() or int(declared) > limit):
                 await reply(413, "body_too_large")
                 return

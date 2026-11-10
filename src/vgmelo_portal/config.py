@@ -70,6 +70,9 @@ class Settings(BaseSettings):
     alert_budget_percents: str = Field(default="80,100", pattern=r"^\s*(\d{1,3}\s*(,\s*\d{1,3}\s*)*)?$")
 
     max_body_bytes: int = Field(default=16 * 1024, ge=1024)
+    # CSV of the credit batch demo (raw text/csv body). Caddy caps /api/* at 64 KB, so keep it below that.
+    batch_max_bytes: int = Field(default=50 * 1024, ge=1024, le=63 * 1024)
+    batch_validate_per_hour: int = Field(default=30, ge=1)  # validating is free, but not unlimited
     question_max_chars: int = Field(default=500, ge=10)
 
     orchestrator_url: str = "http://agent-orchestrator:8000"
