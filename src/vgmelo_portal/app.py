@@ -23,6 +23,7 @@ from .demos import router as demo_router
 from .limits import DEMOS, Calendar, TooMany, tokens_used, used_today, user_tokens_used
 from .mailer import Mailer
 from .ml import router as ml_router
+from .ml_assistant import router as ml_assistant_router
 from .security import Keyring
 from .studio import router as studio_router
 
@@ -32,6 +33,7 @@ SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 # Routes that take a file instead of a small JSON body (their own, larger, cap).
 UPLOAD_PATHS = frozenset({"/api/demo/score/batch", "/api/demo/score/batch/validate"})
 ML_UPLOAD_PATHS = frozenset({"/api/ml/runs"})
+ASSISTANT_PATHS = frozenset({"/api/ml/assistant"})
 
 
 def ml_cors_path(path: str) -> bool:
@@ -97,6 +99,8 @@ class Guard:
             declared = headers.get("content-length")
             if path in ML_UPLOAD_PATHS:
                 limit = self.settings.ml_max_bytes
+            elif path in ASSISTANT_PATHS:
+                limit = self.settings.assistant_max_bytes
             elif path in UPLOAD_PATHS:
                 limit = self.settings.batch_max_bytes
             else:
@@ -201,6 +205,7 @@ def create_app(settings: Settings | None = None, transport: Any = None) -> FastA
     app.include_router(demo_router)
     app.include_router(studio_router)
     app.include_router(ml_router)
+    app.include_router(ml_assistant_router)
     app.include_router(contact_router)
     app.include_router(admin_router)
     app.add_middleware(Guard, settings=cfg)

@@ -34,6 +34,8 @@ class AppContext:
     transport: Any = None
     # Agents runs in flight (single process): user ids and total.
     active_runs: set[str] = field(default_factory=set)
+    # Perguntas ao assistente do Giz em andamento (ids de usuário).
+    active_assistant: set[str] = field(default_factory=set)
     background: set[Any] = field(default_factory=set)
 
     def window(self, bucket: str, limit: int, seconds: int | None = None) -> Window:

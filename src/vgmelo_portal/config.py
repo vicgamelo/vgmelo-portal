@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 from functools import cached_property
+from typing import Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -64,11 +66,14 @@ class Settings(BaseSettings):
     quota_traces: int = Field(default=200, ge=0)
     quota_studio: int = Field(default=10, ge=0)  # runs of agents written in the studio
     quota_ml: int = Field(default=20, ge=0)  # Giz → MLflow: experimentos registrados por dia
+    quota_assistant: int = Field(default=20, ge=0)  # Giz → assistente online: perguntas por dia
     studio_max_versions: int = Field(default=100, ge=1)  # saved versions per user, all agents together
     studio_saves_per_hour: int = Field(default=60, ge=1)
-    # Sum of input+output tokens across every agents run, per day. 0 disables the demo.
+    # Sum of input+output tokens per day across agents, studio, the credit micro-agent and the Giz assistant.
+    # 0 disables them.
     global_daily_tokens: int = Field(default=300_000, ge=0)
-    # Same sum, per user per day: agents, studio and the credit micro-agent share it. 0 disables them.
+    # Same sum, per user per day: agents, studio, the credit micro-agent and the Giz assistant share it.
+    # 0 disables them.
     user_daily_tokens: int = Field(default=50_000, ge=0)
     max_concurrent_runs: int = Field(default=2, ge=1)
     # E-mail to the owner when the day's tokens cross these percentages of the budget (empty disables).
@@ -104,6 +109,45 @@ class Settings(BaseSettings):
     # Origem do Giz: só ela recebe CORS com credenciais, e só em /api/ml/* e /api/me.
     ml_origin: str = ""
     ml_max_bytes: int = Field(default=6 * 1024 * 1024, ge=64 * 1024)
+
+    # Assistente do Giz, modo online: um LLM atrás de um endpoint de chat. A chave fica só aqui. Sem chave, URL,
+    # modelo ou nome do provedor, o assistente online fica desligado (o Giz usa só o modelo do navegador). Os tokens
+    # entram em GLOBAL_DAILY_TOKENS e USER_DAILY_TOKENS, junto com agentes, estúdio e microagente de crédito.
+    assistant_api_key: str = ""
+    assistant_url: str = ""
+    # O Giz mostra estes três antes de a pessoa aceitar mandar o resumo: quem recebe, qual modelo e a política de dados.
+    assistant_provider: str = Field(default="", max_length=200)
+    assistant_model: str = Field(default="", max_length=200)
+    assistant_policy_url: str = ""
+    # Cabeçalho da chave: "Authorization" manda "Bearer <chave>"; outro nome (ex.: x-service-token) manda a chave crua.
+    assistant_auth_header: str = Field(default="Authorization", pattern=r"^[A-Za-z0-9-]{1,64}$")
+    # Corpo do pedido: "openai" manda model, messages, temperature e max_tokens; "messages" manda só as mensagens
+    # (para um gateway próprio que escolhe o modelo e não aceita os outros campos). A resposta é lida no formato da
+    # OpenAI (choices[0].message.content e, se vier, usage.total_tokens).
+    assistant_body: Literal["openai", "messages"] = "openai"
+    assistant_max_tokens: int = Field(default=800, ge=100, le=4000)
+    # Freios que não são estornados quando o provedor falha: por pessoa/hora e o total do dia UTC (todas as pessoas).
+    # Por pessoa/dia vale também o dobro de QUOTA_ASSISTANT em tentativas.
+    assistant_per_hour: int = Field(default=30, ge=1)
+    assistant_daily_calls: int = Field(default=300, ge=1)
+    assistant_max_concurrent: int = Field(default=2, ge=1)
+    # Resumo (até 6.000 caracteres) + 6 mensagens de até 2.000, com caracteres de até 3 bytes; o Caddy corta /api/*
+    # em 64 KB.
+    assistant_max_bytes: int = Field(default=60 * 1024, ge=16 * 1024, le=63 * 1024)
+
+    @field_validator("assistant_url")
+    @classmethod
+    def _http_url(cls, v: str) -> str:
+        if v and not re.fullmatch(r"https?://[^\s/]+(/\S*)?", v):
+            raise ValueError("ASSISTANT_URL precisa ser uma URL http(s) completa")
+        return v
+
+    @field_validator("assistant_policy_url")
+    @classmethod
+    def _https_url(cls, v: str) -> str:
+        if v and not re.fullmatch(r"https://[^\s/]+(/\S*)?", v):
+            raise ValueError("ASSISTANT_POLICY_URL precisa ser uma URL https (vira link no Giz)")
+        return v
 
     @field_validator("site_url", "ml_origin")
     @classmethod
