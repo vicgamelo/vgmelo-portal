@@ -93,6 +93,8 @@ class FakeNet(httpx2.BaseTransport, httpx2.AsyncBaseTransport):
             {"email": "Octo@Example.com", "primary": True, "verified": True},
         ]
         self.traces: dict[str, list[dict[str, Any]]] = {}
+        # (host, prefixo do path, handler): para APIs com ids no caminho, como os artefatos do MLflow.
+        self.prefixes: list[tuple[str, str, Handler]] = []
         self._defaults()
 
     def fresh_mcp(self) -> None:
@@ -136,6 +138,8 @@ class FakeNet(httpx2.BaseTransport, httpx2.AsyncBaseTransport):
             spans = self.traces.get(path.rsplit("/", 1)[1])
             return httpx2.Response(200, json=spans) if spans is not None else httpx2.Response(404, json={})
         handler = self.routes.get((host, path))
+        if handler is None:
+            handler = next((h for (ph, pp, h) in self.prefixes if ph == host and path.startswith(pp)), None)
         if handler is None:
             return httpx2.Response(599, json={"error": f"no fake for {host}{path}"})
         return handler(request)

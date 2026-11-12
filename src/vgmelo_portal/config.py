@@ -63,6 +63,7 @@ class Settings(BaseSettings):
     quota_mcp: int = Field(default=30, ge=0)
     quota_traces: int = Field(default=200, ge=0)
     quota_studio: int = Field(default=10, ge=0)  # runs of agents written in the studio
+    quota_ml: int = Field(default=20, ge=0)  # Giz → MLflow: experimentos registrados por dia
     studio_max_versions: int = Field(default=100, ge=1)  # saved versions per user, all agents together
     studio_saves_per_hour: int = Field(default=60, ge=1)
     # Sum of input+output tokens across every agents run, per day. 0 disables the demo.
@@ -97,7 +98,14 @@ class Settings(BaseSettings):
     scoring_url: str = "http://scoring:8000"
     mcp_url: str = "http://mcp-brasil:8000/mcp"
 
-    @field_validator("site_url")
+    # Giz (estúdio de ML no navegador, em outro subdomínio). Vazio: a rota /api/ml responde 503.
+    mlflow_url: str = ""  # ex.: http://mlflow:5000, pela rede interna; o MLflow não fica exposto
+    mlflow_experiment: str = Field(default="giz", min_length=1, max_length=100)
+    # Origem do Giz: só ela recebe CORS com credenciais, e só em /api/ml/* e /api/me.
+    ml_origin: str = ""
+    ml_max_bytes: int = Field(default=6 * 1024 * 1024, ge=64 * 1024)
+
+    @field_validator("site_url", "ml_origin")
     @classmethod
     def _no_trailing_slash(cls, v: str) -> str:
         return v.rstrip("/")

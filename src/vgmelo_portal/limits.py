@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from .db import BudgetAlert, RateCounter, TokenBudget, Usage, UserTokens, affected
 
-DEMOS = ("agents", "score", "mcp", "traces", "studio")
+DEMOS = ("agents", "score", "mcp", "traces", "studio", "ml")
 
 
 class TooMany(HTTPException):
