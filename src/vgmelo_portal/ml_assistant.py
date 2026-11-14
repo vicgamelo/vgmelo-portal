@@ -208,7 +208,8 @@ async def _complete(ctx: AppContext, body: Ask) -> tuple[str, int]:
     data: Any = None
     try:
         data = resp.json()
-        content = data["choices"][0]["message"]["content"]
+        # O gateway próprio ("messages") responde {"content": "..."}; o formato da OpenAI, choices[0].message.content.
+        content = data["content"] if s.assistant_body == "messages" else data["choices"][0]["message"]["content"]
     except (ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
         # Só os nomes dos campos de cima, para dar para ver que o formato é outro sem logar o conteúdo.
         shape = sorted(str(k)[:30] for k in data)[:10] if isinstance(data, dict) else type(data).__name__

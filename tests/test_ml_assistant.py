@@ -239,11 +239,13 @@ def test_o_que_chega_ao_provedor(client: TestClient, llm: FakeLLM) -> None:
 @pytest.mark.parametrize("overrides", [base(assistant_auth_header="x-service-token", assistant_body="messages")])
 def test_gateway_proprio_cabecalho_do_token_e_corpo_so_com_mensagens(client: TestClient, llm: FakeLLM) -> None:
     """Um servidor próprio (vLLM atrás de um gateway): a chave vai crua num cabeçalho dele e o corpo leva só as
-    mensagens, sem model, temperature ou max_tokens. A resposta sem `usage` é cobrada pela estimativa."""
+    mensagens, sem model, temperature ou max_tokens. Ele responde {"content": "..."}, sem `usage`: a pergunta é
+    cobrada pela estimativa."""
     oauth_login(client)
-    llm.tokens = None
+    llm.raw = {"content": "<think>raciocínio</think>" + llm.reply}
     resp = ask(client)
     assert resp.status_code == 200, resp.text
+    assert resp.json()["reply"] == llm.reply
     (req,) = llm.requests()
     (sent,) = llm.sent()
     assert req.headers["x-service-token"] == KEY
@@ -253,6 +255,22 @@ def test_gateway_proprio_cabecalho_do_token_e_corpo_so_com_mensagens(client: Tes
     assert sent["messages"][1:] == [{"role": "user", "content": "Explique os alertas"}]
     assert resp.json()["model"] == MODEL  # o nome mostrado no consentimento, mesmo sem ir no corpo
     assert resp.json()["tokens"]["used"] == estimate(llm.reply)
+    # erro do gateway ({"error": ...} com 4xx/5xx) e resposta em outro formato: 502, com a cota devolvida
+    llm.status, llm.raw = 500, {"error": "modelo fora do ar"}
+    assert ask(client).status_code == 502
+    llm.status, llm.raw = 200, {"choices": [{"message": {"content": "formato da OpenAI"}}]}
+    assert ask(client).status_code == 502
+    llm.raw = {"content": ""}
+    assert ask(client).json() == {"detail": "empty_reply"}
+    assert me(client)["quotas"]["assistant"]["used"] == 1
+
+
+@pytest.mark.parametrize("overrides", [base(assistant_provider=f" {PROVIDER} ", assistant_model=f"{MODEL}\n")])
+def test_espaco_sobrando_no_env_nao_vira_recusa_permanente(client: TestClient, llm: FakeLLM) -> None:
+    info = client.get("/api/ml/assistant").json()
+    assert (info["provider"], info["model"]) == (PROVIDER, MODEL)
+    oauth_login(client)
+    assert ask(client, provider=info["provider"], model=info["model"]).status_code == 200
 
 
 @pytest.mark.parametrize("change", [{"model": "modelo-antigo"}, {"provider": "Outro provedor"}])

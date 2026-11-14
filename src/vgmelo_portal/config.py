@@ -122,8 +122,8 @@ class Settings(BaseSettings):
     # Cabeçalho da chave: "Authorization" manda "Bearer <chave>"; outro nome (ex.: x-service-token) manda a chave crua.
     assistant_auth_header: str = Field(default="Authorization", pattern=r"^[A-Za-z0-9-]{1,64}$")
     # Corpo do pedido: "openai" manda model, messages, temperature e max_tokens; "messages" manda só as mensagens
-    # (para um gateway próprio que escolhe o modelo e não aceita os outros campos). A resposta é lida no formato da
-    # OpenAI (choices[0].message.content e, se vier, usage.total_tokens).
+    # (para um gateway próprio que escolhe o modelo). A resposta é lida conforme o formato: "openai" espera
+    # choices[0].message.content e, se vier, usage.total_tokens; "messages" espera {"content": "..."}.
     assistant_body: Literal["openai", "messages"] = "openai"
     assistant_max_tokens: int = Field(default=800, ge=100, le=4000)
     # Freios que não são estornados quando o provedor falha: por pessoa/hora e o total do dia UTC (todas as pessoas).
@@ -134,6 +134,12 @@ class Settings(BaseSettings):
     # Resumo (até 6.000 caracteres) + 6 mensagens de até 2.000, com caracteres de até 3 bytes; o Caddy corta /api/*
     # em 64 KB.
     assistant_max_bytes: int = Field(default=60 * 1024, ge=16 * 1024, le=63 * 1024)
+
+    @field_validator("assistant_provider", "assistant_model")
+    @classmethod
+    def _trimmed(cls, v: str) -> str:
+        # O Giz devolve estes dois no pedido e o portal compara: um espaço sobrando no .env recusaria tudo.
+        return v.strip()
 
     @field_validator("assistant_url")
     @classmethod
