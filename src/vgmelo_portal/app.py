@@ -22,6 +22,8 @@ from .db import make_engine, make_sessionmaker
 from .demos import router as demo_router
 from .limits import DEMOS, Calendar, TooMany, tokens_used, used_today, user_tokens_used
 from .mailer import Mailer
+from .ml import router as ml_router
+from .ml_assistant import router as ml_assistant_router
 from .security import Keyring
 from .studio import router as studio_router
 
@@ -30,6 +32,13 @@ logger = logging.getLogger("vgmelo_portal")
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 # Routes that take a file instead of a small JSON body (their own, larger, cap).
 UPLOAD_PATHS = frozenset({"/api/demo/score/batch", "/api/demo/score/batch/validate"})
+ML_UPLOAD_PATHS = frozenset({"/api/ml/runs"})
+ASSISTANT_PATHS = frozenset({"/api/ml/assistant"})
+
+
+def ml_cors_path(path: str) -> bool:
+    """Rotas que o Giz (outro subdomínio) chama com o cookie de sessão."""
+    return path == "/api/me" or path.startswith("/api/ml/")
 
 
 class Guard:
@@ -51,10 +60,14 @@ class Guard:
         async def reply(status: int, detail: str) -> None:
             await JSONResponse({"detail": detail}, status)(scope, receive, send_wrapped)
 
+        origin = headers.get("origin", "").rstrip("/")
+        cors = bool(self.settings.ml_origin) and origin == self.settings.ml_origin and ml_cors_path(path)
+
         async def send_wrapped(message: Message) -> None:
             if message["type"] == "http.response.start":
                 status_holder["status"] = message["status"]
-                extra = [
+                extra = [*(self._cors_headers(origin) if cors else [])]
+                extra += [
                     (b"x-content-type-options", b"nosniff"),
                     (b"referrer-policy", b"strict-origin-when-cross-origin"),
                     (b"x-frame-options", b"DENY"),
@@ -66,11 +79,32 @@ class Guard:
             await send(message)
 
         try:
-            if method not in SAFE_METHODS and headers.get("origin", "").rstrip("/") not in self.settings.origins:
+            if cors and method == "OPTIONS":  # preflight do Giz
+                await send_wrapped(
+                    {
+                        "type": "http.response.start",
+                        "status": 204,
+                        "headers": [
+                            (b"access-control-allow-methods", b"GET, POST"),
+                            (b"access-control-allow-headers", b"content-type"),
+                            (b"access-control-max-age", b"600"),
+                        ],
+                    }
+                )
+                await send_wrapped({"type": "http.response.body", "body": b""})
+                return
+            if method not in SAFE_METHODS and origin not in self.settings.origins and not cors:
                 await reply(403, "bad_origin")
                 return
             declared = headers.get("content-length")
-            limit = self.settings.batch_max_bytes if path in UPLOAD_PATHS else self.settings.max_body_bytes
+            if path in ML_UPLOAD_PATHS:
+                limit = self.settings.ml_max_bytes
+            elif path in ASSISTANT_PATHS:
+                limit = self.settings.assistant_max_bytes
+            elif path in UPLOAD_PATHS:
+                limit = self.settings.batch_max_bytes
+            else:
+                limit = self.settings.max_body_bytes
             if declared is not None and (not declared.isdigit() or int(declared) > limit):
                 await reply(413, "body_too_large")
                 return
@@ -100,6 +134,14 @@ class Guard:
             logger.info(
                 "%s %s %s %.0fms", method, path, status_holder["status"], (time.perf_counter() - started) * 1000
             )
+
+    @staticmethod
+    def _cors_headers(origin: str) -> list[tuple[bytes, bytes]]:
+        return [
+            (b"access-control-allow-origin", origin.encode("latin-1")),
+            (b"access-control-allow-credentials", b"true"),
+            (b"vary", b"Origin"),
+        ]
 
 
 def quiet_third_party_loggers() -> None:
@@ -162,6 +204,8 @@ def create_app(settings: Settings | None = None, transport: Any = None) -> FastA
     app.include_router(auth_router)
     app.include_router(demo_router)
     app.include_router(studio_router)
+    app.include_router(ml_router)
+    app.include_router(ml_assistant_router)
     app.include_router(contact_router)
     app.include_router(admin_router)
     app.add_middleware(Guard, settings=cfg)

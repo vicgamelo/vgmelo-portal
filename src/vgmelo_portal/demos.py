@@ -41,15 +41,21 @@ SSE_HEADERS = {"Cache-Control": "no-store", "X-Accel-Buffering": "no"}
 
 
 def alert_budget(ctx: AppContext, db: Session, day: str) -> None:
-    """Tells the owner when the agents demo is eating its daily token budget (each threshold once a day)."""
+    """Tells the owner when the LLM demos (agents, studio, credit micro-agent, Giz assistant) are eating the
+    daily token budget (each threshold once a day)."""
     s = ctx.settings
     budget = s.global_daily_tokens
     for pct, used in crossed_alerts(db, day, budget, s.budget_alert_percents):
-        what = "acabou: a demo de agentes e o estúdio param até a meia-noite" if pct >= 100 else f"chegou a {pct}%"
+        what = (
+            "acabou: a demo de agentes, o estúdio e o assistente do Giz param até a meia-noite"
+            if pct >= 100
+            else f"chegou a {pct}%"
+        )
         ctx.mailer.send(
             s.alert_to or s.contact_to,
             f"vgmelo.tech: teto de tokens de hoje {what}",
-            f"Demos de agentes e estúdio, {day}: {used:,} de {budget:,} tokens ({used * 100 // budget}%).\n"
+            f"Demos de agentes, estúdio e assistente do Giz, {day}: {used:,} de {budget:,} tokens "
+            f"({used * 100 // budget}%).\n"
             "O teto zera à meia-noite (America/Sao_Paulo). Ele fica abaixo do plano grátis do Groq/OpenRouter;\n"
             "se os avisos virarem rotina, baixe GLOBAL_DAILY_TOKENS, USER_DAILY_TOKENS ou as cotas no .env da VPS.\n\n"
             f"Execuções e consumo por dia: {s.site_url}/admin\n",
